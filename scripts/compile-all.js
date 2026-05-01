@@ -38,6 +38,7 @@ async function main() {
     path.join(contractsRoot, "identity"),
     path.join(contractsRoot, "attestations"),
     path.join(contractsRoot, "invoice"),
+    path.join(contractsRoot, "servicing"),
     path.join(contractsRoot, "vault"),
     path.join(contractsRoot, "mocks"),
     path.join(contractsRoot, "token"),
@@ -94,4 +95,3 @@ async function main() {
 }
 
 await main();
-

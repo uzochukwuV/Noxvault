@@ -19,7 +19,8 @@ contract InvoiceRegistry is Ownable2Step {
         Funded,
         Repaid,
         Defaulted,
-        Cancelled
+        Cancelled,
+        Disputed
     }
 
     struct Invoice {
@@ -45,8 +46,10 @@ contract InvoiceRegistry is Ownable2Step {
     mapping(uint256 => Invoice) private _invoices;
     mapping(bytes32 => bool) public invoiceRefUsed;
     mapping(address => bool) public isVault;
+    mapping(address => bool) public isServicer;
 
     event VaultUpdated(address indexed vault, bool allowed);
+    event ServicerUpdated(address indexed servicer, bool allowed);
 
     event InvoiceCreated(uint256 indexed invoiceId, bytes32 indexed invoiceRef, address indexed issuer);
     event InvoiceCreatedConfidential(
@@ -61,6 +64,9 @@ contract InvoiceRegistry is Ownable2Step {
 
     event InvoiceFundedEncrypted(uint256 indexed invoiceId, bytes32 amountHandle);
     event InvoiceRepaidEncrypted(uint256 indexed invoiceId, bytes32 amountHandle);
+    event InvoiceDisputed(uint256 indexed invoiceId);
+    event InvoiceDisputeResolved(uint256 indexed invoiceId);
+    event InvoiceDefaulted(uint256 indexed invoiceId);
 
     constructor(IIdentityRegistry _identityRegistry) Ownable(msg.sender) {
         identityRegistry = _identityRegistry;
@@ -69,6 +75,11 @@ contract InvoiceRegistry is Ownable2Step {
     function setVault(address vault, bool allowed) external onlyOwner {
         isVault[vault] = allowed;
         emit VaultUpdated(vault, allowed);
+    }
+
+    function setServicer(address servicer, bool allowed) external onlyOwner {
+        isServicer[servicer] = allowed;
+        emit ServicerUpdated(servicer, allowed);
     }
 
     function getInvoice(uint256 invoiceId) external view returns (Invoice memory) {
@@ -200,10 +211,38 @@ contract InvoiceRegistry is Ownable2Step {
     }
 
     function markRepaidEncrypted(uint256 invoiceId, euint256 amount) external {
-        require(isVault[msg.sender]);
+        require(isServicer[msg.sender]);
+        Invoice storage inv = _invoices[invoiceId];
+        require(inv.status == Status.Funded || inv.status == Status.Disputed);
+        euint256 newRepaid = Nox.add(inv.repaidAmountEncrypted, amount);
+        inv.repaidAmountEncrypted = newRepaid;
+        Nox.allowThis(newRepaid);
+        Nox.allow(newRepaid, inv.issuer);
+        Nox.allow(newRepaid, owner());
+        emit InvoiceRepaidEncrypted(invoiceId, euint256.unwrap(newRepaid));
+    }
+
+    function markDisputed(uint256 invoiceId) external {
+        require(isServicer[msg.sender]);
         Invoice storage inv = _invoices[invoiceId];
         require(inv.status == Status.Funded);
-        inv.repaidAmountEncrypted = amount;
-        emit InvoiceRepaidEncrypted(invoiceId, euint256.unwrap(amount));
+        inv.status = Status.Disputed;
+        emit InvoiceDisputed(invoiceId);
+    }
+
+    function resolveDispute(uint256 invoiceId) external {
+        require(isServicer[msg.sender]);
+        Invoice storage inv = _invoices[invoiceId];
+        require(inv.status == Status.Disputed);
+        inv.status = Status.Funded;
+        emit InvoiceDisputeResolved(invoiceId);
+    }
+
+    function markDefaulted(uint256 invoiceId) external {
+        require(isServicer[msg.sender]);
+        Invoice storage inv = _invoices[invoiceId];
+        require(inv.status == Status.Funded || inv.status == Status.Disputed);
+        inv.status = Status.Defaulted;
+        emit InvoiceDefaulted(invoiceId);
     }
 }

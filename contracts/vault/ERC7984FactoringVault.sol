@@ -7,6 +7,7 @@ import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IIdentityRegistry} from "../identity/IIdentityRegistry.sol";
 import {InvoiceRegistry} from "../invoice/InvoiceRegistry.sol";
+import {IServicingRouter} from "../servicing/IServicingRouter.sol";
 import {IERC7984} from "@iexec-nox/nox-confidential-contracts/contracts/interfaces/IERC7984.sol";
 import {IERC7984Receiver} from "@iexec-nox/nox-confidential-contracts/contracts/interfaces/IERC7984Receiver.sol";
 import {Nox, ebool, euint256, externalEuint256} from "@iexec-nox/nox-protocol-contracts/contracts/sdk/Nox.sol";
@@ -18,6 +19,7 @@ contract ERC7984FactoringVault is Ownable2Step, Pausable, ReentrancyGuard, IERC7
     IERC7984 public immutable cashToken;
     IIdentityRegistry public immutable identityRegistry;
     InvoiceRegistry public immutable invoiceRegistry;
+    IServicingRouter public servicingRouter;
 
     address public operator;
 
@@ -35,6 +37,7 @@ contract ERC7984FactoringVault is Ownable2Step, Pausable, ReentrancyGuard, IERC7
     mapping(uint256 => RedeemRequest) public redeemRequests;
 
     event OperatorUpdated(address indexed operator);
+    event ServicingRouterUpdated(address indexed servicingRouter);
     event DepositReceived(address indexed investor, bytes32 amountHandle);
     event RepaymentReceived(uint256 indexed invoiceId, bytes32 amountHandle);
     event RedeemRequested(uint256 indexed requestId, address indexed investor, bytes32 sharesHandle);
@@ -69,6 +72,11 @@ contract ERC7984FactoringVault is Ownable2Step, Pausable, ReentrancyGuard, IERC7
 
     function setOperator(address newOperator) external onlyOwner {
         _setOperator(newOperator);
+    }
+
+    function setServicingRouter(IServicingRouter newServicingRouter) external onlyOwner {
+        servicingRouter = newServicingRouter;
+        emit ServicingRouterUpdated(address(newServicingRouter));
     }
 
     function requestRedeem(
@@ -163,7 +171,9 @@ contract ERC7984FactoringVault is Ownable2Step, Pausable, ReentrancyGuard, IERC7
         } else {
             require(data.length == 32);
             uint256 invoiceId = abi.decode(data, (uint256));
-            invoiceRegistry.markRepaidEncrypted(invoiceId, amount);
+            address router = address(servicingRouter);
+            require(router != address(0));
+            servicingRouter.reportPayment(invoiceId, amount, from, bytes32(0));
             emit RepaymentReceived(invoiceId, euint256.unwrap(amount));
         }
 

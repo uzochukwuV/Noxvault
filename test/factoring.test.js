@@ -20,6 +20,7 @@ function getProjectPaths() {
       path.join(contractsRoot, "identity"),
       path.join(contractsRoot, "attestations"),
       path.join(contractsRoot, "invoice"),
+      path.join(contractsRoot, "servicing"),
       path.join(contractsRoot, "vault"),
       path.join(contractsRoot, "mocks"),
       path.join(contractsRoot, "token"),
@@ -341,6 +342,7 @@ describe("Box / Nox factoring vault", function () {
       "invoice/IConfidentialInvoiceProofVerifier.sol",
       "invoice/ConfidentialEcdsaAuditorVerifier.sol",
       "invoice/InvoiceRegistry.sol",
+      "servicing/ServicingRouter.sol",
       "mocks/MockERC20.sol",
       "mocks/MockNoxCompute.sol",
       "token/WrappedMockUSDC.sol",
@@ -358,6 +360,9 @@ describe("Box / Nox factoring vault", function () {
     await verifier.setAuditor(auditor.address, true);
 
     const invoices = await deploy(artifacts, "InvoiceRegistry", deployer, [await identity.getAddress()]);
+    const servicing = await deploy(artifacts, "ServicingRouter", deployer, [await invoices.getAddress()]);
+    await servicing.setDisputeWindow(0);
+    await invoices.setServicer(await servicing.getAddress(), true);
     const usdc = await deploy(artifacts, "MockERC20", deployer, ["MockUSDC", "mUSDC"]);
     const wrapper = await deploy(artifacts, "WrappedMockUSDC", deployer, [await usdc.getAddress()]);
     const vault = await deploy(artifacts, "ERC7984FactoringVault", deployer, [
@@ -367,6 +372,7 @@ describe("Box / Nox factoring vault", function () {
       operator.address,
     ]);
     await invoices.setVault(await vault.getAddress(), true);
+    await vault.setServicingRouter(await servicing.getAddress());
 
     const mockCompute = new ethers.Contract(NOX_COMPUTE_31337, artifacts.get("MockNoxCompute").abi, issuer);
     const faceValue = 1_000_000n;
@@ -445,13 +451,24 @@ describe("Box / Nox factoring vault", function () {
       ethers.zeroPadValue(ethers.toBeHex(repayAmount), 32),
       TEE_UINT256,
     );
-    await wrapper
+    const repayTx = await wrapper
       .connect(issuer)
       ["confidentialTransferAndCall(address,bytes32,bytes)"](
         await vault.getAddress(),
         repayHandle,
         abi.encode(["uint256"], [invoiceId]),
       );
+    const repayReceipt = await repayTx.wait();
+    const paymentId = repayReceipt.logs
+      .map((l) => {
+        try {
+          return servicing.interface.parseLog(l);
+        } catch {
+          return null;
+        }
+      })
+      .find((d) => d && d.name === "PaymentReported").args.paymentId;
+    await servicing.finalizePayment(invoiceId, paymentId);
 
     const inv = await invoices.getInvoice(invoiceId);
     expect(inv.confidential).to.equal(true);
