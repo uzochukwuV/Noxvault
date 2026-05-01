@@ -117,7 +117,7 @@ contract PlainFactoringVault is Ownable2Step, Pausable, ReentrancyGuard {
         InvoiceRegistry.Invoice memory inv = invoiceRegistry.getInvoice(invoiceId);
         require(inv.status == InvoiceRegistry.Status.Created);
         if (address(riskManager) != address(0)) {
-            riskManager.consumePlainFunding(inv.issuer, amount);
+            riskManager.consumePlainFunding(inv.issuer, inv.obligorHash, inv.riskTier, amount);
         }
         asset.safeTransfer(inv.settlementRecipient, amount);
         invoiceRegistry.markFunded(invoiceId, amount);
@@ -130,7 +130,7 @@ contract PlainFactoringVault is Ownable2Step, Pausable, ReentrancyGuard {
         InvoiceRegistry.Invoice memory inv = invoiceRegistry.getInvoice(invoiceId);
         invoiceRegistry.markRepaid(invoiceId, amount);
         if (address(riskManager) != address(0)) {
-            riskManager.recordPlainRepayment(inv.issuer, amount);
+            riskManager.recordPlainRepayment(inv.issuer, inv.obligorHash, inv.riskTier, amount);
         }
         emit InvoiceRepaid(invoiceId, amount);
     }

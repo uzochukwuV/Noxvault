@@ -9,8 +9,9 @@ interface IInvoiceProofVerifier {
         address settlementRecipient;
         bytes32 metadataHash;
         bytes32 invoiceRef;
+        bytes32 obligorHash;
+        uint8 riskTier;
     }
 
     function verify(InvoiceProofContext calldata ctx, bytes calldata proof) external view returns (bool);
 }
-

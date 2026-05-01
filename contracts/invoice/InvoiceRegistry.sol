@@ -30,6 +30,8 @@ contract InvoiceRegistry is Ownable2Step {
         address settlementRecipient;
         bytes32 metadataHash;
         bytes32 invoiceRef;
+        bytes32 obligorHash;
+        uint8 riskTier;
         address verifier;
         bool confidential;
         Status status;
@@ -88,9 +90,9 @@ contract InvoiceRegistry is Ownable2Step {
 
     function getFundingData(
         uint256 invoiceId
-    ) external view returns (Status status, address issuer, address settlementRecipient) {
+    ) external view returns (Status status, address issuer, address settlementRecipient, bytes32 obligorHash, uint8 riskTier) {
         Invoice storage inv = _invoices[invoiceId];
-        return (inv.status, inv.issuer, inv.settlementRecipient);
+        return (inv.status, inv.issuer, inv.settlementRecipient, inv.obligorHash, inv.riskTier);
     }
 
     function createInvoice(
@@ -99,6 +101,8 @@ contract InvoiceRegistry is Ownable2Step {
         address settlementRecipient,
         bytes32 metadataHash,
         bytes32 invoiceRef,
+        bytes32 obligorHash,
+        uint8 riskTier,
         address verifier,
         bytes calldata proof
     ) external returns (uint256 invoiceId) {
@@ -113,7 +117,9 @@ contract InvoiceRegistry is Ownable2Step {
             dueDate: dueDate,
             settlementRecipient: settlementRecipient,
             metadataHash: metadataHash,
-            invoiceRef: invoiceRef
+            invoiceRef: invoiceRef,
+            obligorHash: obligorHash,
+            riskTier: riskTier
         });
         require(IInvoiceProofVerifier(verifier).verify(ctx, proof));
 
@@ -127,6 +133,8 @@ contract InvoiceRegistry is Ownable2Step {
         inv.settlementRecipient = settlementRecipient;
         inv.metadataHash = metadataHash;
         inv.invoiceRef = invoiceRef;
+        inv.obligorHash = obligorHash;
+        inv.riskTier = riskTier;
         inv.verifier = verifier;
         inv.confidential = false;
         inv.status = Status.Created;
@@ -141,6 +149,8 @@ contract InvoiceRegistry is Ownable2Step {
         address settlementRecipient,
         bytes32 metadataHash,
         bytes32 invoiceRef,
+        bytes32 obligorHash,
+        uint8 riskTier,
         address verifier,
         bytes calldata proof
     ) external returns (uint256 invoiceId) {
@@ -159,7 +169,9 @@ contract InvoiceRegistry is Ownable2Step {
                 dueDate: dueDate,
                 settlementRecipient: settlementRecipient,
                 metadataHash: metadataHash,
-                invoiceRef: invoiceRef
+                invoiceRef: invoiceRef,
+                obligorHash: obligorHash,
+                riskTier: riskTier
             });
         require(IConfidentialInvoiceProofVerifier(verifier).verify(ctx, proof));
 
@@ -173,6 +185,8 @@ contract InvoiceRegistry is Ownable2Step {
         inv.settlementRecipient = settlementRecipient;
         inv.metadataHash = metadataHash;
         inv.invoiceRef = invoiceRef;
+        inv.obligorHash = obligorHash;
+        inv.riskTier = riskTier;
         inv.verifier = verifier;
         inv.confidential = true;
         inv.status = Status.Created;

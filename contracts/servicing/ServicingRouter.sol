@@ -136,7 +136,7 @@ contract ServicingRouter is Ownable2Step {
             invoiceRegistry.markRepaidEncrypted(invoiceId, p.amount);
             InvoiceRegistry.Invoice memory inv = invoiceRegistry.getInvoice(invoiceId);
             if (address(riskManager) != address(0)) {
-                riskManager.commitConfidentialRepayment(inv.issuer, p.amount);
+                riskManager.commitConfidentialRepayment(inv.issuer, inv.obligorHash, inv.riskTier, p.amount);
             }
         }
         invoiceRegistry.resolveDispute(invoiceId);
@@ -156,7 +156,7 @@ contract ServicingRouter is Ownable2Step {
         invoiceRegistry.markRepaidEncrypted(invoiceId, p.amount);
         InvoiceRegistry.Invoice memory inv = invoiceRegistry.getInvoice(invoiceId);
         if (address(riskManager) != address(0)) {
-            riskManager.commitConfidentialRepayment(inv.issuer, p.amount);
+            riskManager.commitConfidentialRepayment(inv.issuer, inv.obligorHash, inv.riskTier, p.amount);
         }
         emit PaymentFinalized(invoiceId, paymentId, euint256.unwrap(p.amount));
     }
