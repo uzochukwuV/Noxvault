@@ -1,0 +1,22 @@
+{
+  "name": "noxvault",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "hardhat test --no-compile",
+    "compile:offline": "node scripts/compile-all.js"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-ethers": "^4.0.10",
+    "chai": "^6.2.2",
+    "ethers": "^6.16.0",
+    "hardhat": "^3.4.3",
+    "solc": "^0.8.28"
+  },
+  "dependencies": {
+    "@iexec-nox/nox-confidential-contracts": "^0.1.0",
+    "@iexec-nox/nox-protocol-contracts": "^0.2.2",
+    "@openzeppelin/contracts": "^5.6.1"
+  }
+}
