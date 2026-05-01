@@ -21,6 +21,8 @@ function getProjectPaths() {
       path.join(contractsRoot, "attestations"),
       path.join(contractsRoot, "invoice"),
       path.join(contractsRoot, "servicing"),
+      path.join(contractsRoot, "risk"),
+      path.join(contractsRoot, "disclosure"),
       path.join(contractsRoot, "vault"),
       path.join(contractsRoot, "mocks"),
       path.join(contractsRoot, "token"),
@@ -122,6 +124,7 @@ describe("Box / Nox factoring vault", function () {
       "invoice/EcdsaAuditorVerifier.sol",
       "invoice/AttestationVerifier.sol",
       "invoice/InvoiceRegistry.sol",
+      "risk/RiskManager.sol",
       "mocks/MockERC20.sol",
       "vault/PlainFactoringVault.sol",
     ]);
@@ -139,6 +142,12 @@ describe("Box / Nox factoring vault", function () {
       await identity.getAddress(),
       await invoices.getAddress(),
     ]);
+    const risk = await deploy(artifacts, "RiskManager", deployer);
+    await risk.setPlainVault(await vault.getAddress());
+    await risk.setPoolCapPlain(600_000n);
+    await risk.setIssuerCapPlain(issuer.address, 600_000n);
+    await risk.setInvoiceCapPlain(600_000n);
+    await vault.setRiskManager(await risk.getAddress());
 
     await invoices.setVault(await vault.getAddress(), true);
 
@@ -259,12 +268,16 @@ describe("Box / Nox factoring vault", function () {
       "invoice/IConfidentialInvoiceProofVerifier.sol",
       "invoice/ConfidentialEcdsaAuditorVerifier.sol",
       "invoice/InvoiceRegistry.sol",
+      "disclosure/DisclosureManager.sol",
       "mocks/MockNoxCompute.sol",
     ]);
 
     const identity = await deploy(artifacts, "IdentityRegistry", deployer);
     const verifier = await deploy(artifacts, "ConfidentialEcdsaAuditorVerifier", deployer);
     const invoices = await deploy(artifacts, "InvoiceRegistry", deployer, [await identity.getAddress()]);
+    const disclosure = await deploy(artifacts, "DisclosureManager", deployer);
+    await disclosure.setAuditor(auditor.address, true);
+    await disclosure.setDisclosureOfficer(deployer.address, true);
 
     await identity.setVerified(issuer.address, 2n, true);
     await verifier.setAuditor(auditor.address, true);
@@ -273,10 +286,12 @@ describe("Box / Nox factoring vault", function () {
     const mockCompute = new ethers.Contract(NOX_COMPUTE_31337, artifacts.get("MockNoxCompute").abi, issuer);
 
     const faceValue = 1_000_000n;
-    const faceValueHandle = await mockCompute.wrapAsPublicHandle(
+    const faceValuePublic = await mockCompute.wrapAsPublicHandle(
       ethers.zeroPadValue(ethers.toBeHex(faceValue), 32),
       TEE_UINT256,
     );
+    const zero = await mockCompute.wrapAsPublicHandle(ethers.ZeroHash, TEE_UINT256);
+    const faceValueHandle = await mockCompute.add(faceValuePublic, zero);
 
     const dueDate = BigInt(Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60);
     const settlementRecipient = issuer.address;
@@ -331,6 +346,12 @@ describe("Box / Nox factoring vault", function () {
     expect(inv.confidential).to.equal(true);
     expect(inv.faceValue).to.equal(0n);
     expect(inv.faceValueEncrypted).to.not.equal(ethers.ZeroHash);
+
+    const viewerAllowedBefore = await mockCompute.isAllowed(inv.faceValueEncrypted, auditor.address);
+    expect(viewerAllowedBefore).to.equal(false);
+    await disclosure.discloseInvoice(await invoices.getAddress(), invoiceId, auditor.address, 1);
+    const viewerAllowedAfter = await mockCompute.isAllowed(inv.faceValueEncrypted, auditor.address);
+    expect(viewerAllowedAfter).to.equal(true);
   });
 
   it("ERC-7984 mode: confidential cashflows + confidential invoice terms", async function () {
@@ -343,6 +364,8 @@ describe("Box / Nox factoring vault", function () {
       "invoice/ConfidentialEcdsaAuditorVerifier.sol",
       "invoice/InvoiceRegistry.sol",
       "servicing/ServicingRouter.sol",
+      "risk/RiskManager.sol",
+      "disclosure/DisclosureManager.sol",
       "mocks/MockERC20.sol",
       "mocks/MockNoxCompute.sol",
       "token/WrappedMockUSDC.sol",
@@ -363,6 +386,15 @@ describe("Box / Nox factoring vault", function () {
     const servicing = await deploy(artifacts, "ServicingRouter", deployer, [await invoices.getAddress()]);
     await servicing.setDisputeWindow(0);
     await invoices.setServicer(await servicing.getAddress(), true);
+    const risk = await deploy(artifacts, "RiskManager", deployer);
+    await risk.setConfidentialVault(ethers.ZeroAddress);
+    await risk.setServicingRouter(await servicing.getAddress());
+    await risk.setPoolCapEncryptedPublic(2_000_000n);
+    await risk.setIssuerCapEncryptedPublic(issuer.address, 2_000_000n);
+    await risk.setInvoiceCapEncryptedPublic(1_500_000n);
+    const disclosure = await deploy(artifacts, "DisclosureManager", deployer);
+    await disclosure.setAuditor(auditor.address, true);
+    await disclosure.setDisclosureOfficer(deployer.address, true);
     const usdc = await deploy(artifacts, "MockERC20", deployer, ["MockUSDC", "mUSDC"]);
     const wrapper = await deploy(artifacts, "WrappedMockUSDC", deployer, [await usdc.getAddress()]);
     const vault = await deploy(artifacts, "ERC7984FactoringVault", deployer, [
@@ -373,13 +405,18 @@ describe("Box / Nox factoring vault", function () {
     ]);
     await invoices.setVault(await vault.getAddress(), true);
     await vault.setServicingRouter(await servicing.getAddress());
+    await vault.setRiskManager(await risk.getAddress());
+    await risk.setConfidentialVault(await vault.getAddress());
+    await servicing.setRiskManager(await risk.getAddress());
 
     const mockCompute = new ethers.Contract(NOX_COMPUTE_31337, artifacts.get("MockNoxCompute").abi, issuer);
     const faceValue = 1_000_000n;
-    const faceValueHandle = await mockCompute.wrapAsPublicHandle(
+    const faceValuePublic = await mockCompute.wrapAsPublicHandle(
       ethers.zeroPadValue(ethers.toBeHex(faceValue), 32),
       TEE_UINT256,
     );
+    const zero = await mockCompute.wrapAsPublicHandle(ethers.ZeroHash, TEE_UINT256);
+    const faceValueHandle = await mockCompute.add(faceValuePublic, zero);
 
     const dueDate = BigInt(Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60);
     const settlementRecipient = issuer.address;
@@ -444,7 +481,8 @@ describe("Box / Nox factoring vault", function () {
       ethers.zeroPadValue(ethers.toBeHex(fundAmount), 32),
       TEE_UINT256,
     );
-    await vault.connect(operator).fundInvoice(invoiceId, fundHandle, "0x");
+    const riskBundle = abi.encode(["bytes", "bytes", "bytes"], ["0x01", "0x01", "0x01"]);
+    await vault.connect(operator)["fundInvoice(uint256,bytes32,bytes,bytes)"](invoiceId, fundHandle, "0x", riskBundle);
 
     const repayAmount = 200_000n;
     const repayHandle = await operatorCompute.wrapAsPublicHandle(
@@ -475,5 +513,10 @@ describe("Box / Nox factoring vault", function () {
     expect(inv.faceValue).to.equal(0n);
     expect(inv.status).to.equal(2n);
     expect(inv.repaidAmountEncrypted).to.not.equal(ethers.ZeroHash);
+
+    await disclosure.discloseInvestorShares(await vault.getAddress(), investor.address, auditor.address);
+    const sharesHandle = await vault.sharesOf(investor.address);
+    const viewerAllowedShares = await mockCompute.isAllowed(sharesHandle, auditor.address);
+    expect(viewerAllowedShares).to.equal(true);
   });
 });

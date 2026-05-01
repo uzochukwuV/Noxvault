@@ -39,6 +39,8 @@ async function main() {
     path.join(contractsRoot, "attestations"),
     path.join(contractsRoot, "invoice"),
     path.join(contractsRoot, "servicing"),
+    path.join(contractsRoot, "risk"),
+    path.join(contractsRoot, "disclosure"),
     path.join(contractsRoot, "vault"),
     path.join(contractsRoot, "mocks"),
     path.join(contractsRoot, "token"),

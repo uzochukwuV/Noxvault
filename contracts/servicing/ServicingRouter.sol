@@ -4,6 +4,7 @@ pragma solidity ^0.8.28;
 import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {InvoiceRegistry} from "../invoice/InvoiceRegistry.sol";
+import {RiskManager} from "../risk/RiskManager.sol";
 import {Nox, euint256} from "@iexec-nox/nox-protocol-contracts/contracts/sdk/Nox.sol";
 
 contract ServicingRouter is Ownable2Step {
@@ -18,6 +19,7 @@ contract ServicingRouter is Ownable2Step {
     }
 
     InvoiceRegistry public immutable invoiceRegistry;
+    RiskManager public riskManager;
     uint64 public disputeWindow = 1 days;
 
     mapping(address => bool) public isServicer;
@@ -29,6 +31,7 @@ contract ServicingRouter is Ownable2Step {
     event ServicerUpdated(address indexed servicer, bool allowed);
     event ResolverUpdated(address indexed resolver, bool allowed);
     event DisputeWindowUpdated(uint64 newWindow);
+    event RiskManagerUpdated(address indexed riskManager);
 
     event PaymentReported(
         uint256 indexed invoiceId,
@@ -49,6 +52,11 @@ contract ServicingRouter is Ownable2Step {
 
     constructor(InvoiceRegistry _invoiceRegistry) Ownable(msg.sender) {
         invoiceRegistry = _invoiceRegistry;
+    }
+
+    function setRiskManager(RiskManager newRiskManager) external onlyOwner {
+        riskManager = newRiskManager;
+        emit RiskManagerUpdated(address(newRiskManager));
     }
 
     function setServicer(address servicer, bool allowed) external onlyOwner {
@@ -126,6 +134,10 @@ contract ServicingRouter is Ownable2Step {
         p.finalized = true;
         if (acceptPayment) {
             invoiceRegistry.markRepaidEncrypted(invoiceId, p.amount);
+            InvoiceRegistry.Invoice memory inv = invoiceRegistry.getInvoice(invoiceId);
+            if (address(riskManager) != address(0)) {
+                riskManager.commitConfidentialRepayment(inv.issuer, p.amount);
+            }
         }
         invoiceRegistry.resolveDispute(invoiceId);
         emit PaymentResolved(invoiceId, paymentId, acceptPayment, euint256.unwrap(p.amount));
@@ -142,6 +154,10 @@ contract ServicingRouter is Ownable2Step {
 
         p.finalized = true;
         invoiceRegistry.markRepaidEncrypted(invoiceId, p.amount);
+        InvoiceRegistry.Invoice memory inv = invoiceRegistry.getInvoice(invoiceId);
+        if (address(riskManager) != address(0)) {
+            riskManager.commitConfidentialRepayment(inv.issuer, p.amount);
+        }
         emit PaymentFinalized(invoiceId, paymentId, euint256.unwrap(p.amount));
     }
 

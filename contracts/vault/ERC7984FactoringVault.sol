@@ -8,6 +8,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {IIdentityRegistry} from "../identity/IIdentityRegistry.sol";
 import {InvoiceRegistry} from "../invoice/InvoiceRegistry.sol";
 import {IServicingRouter} from "../servicing/IServicingRouter.sol";
+import {RiskManager} from "../risk/RiskManager.sol";
 import {IERC7984} from "@iexec-nox/nox-confidential-contracts/contracts/interfaces/IERC7984.sol";
 import {IERC7984Receiver} from "@iexec-nox/nox-confidential-contracts/contracts/interfaces/IERC7984Receiver.sol";
 import {Nox, ebool, euint256, externalEuint256} from "@iexec-nox/nox-protocol-contracts/contracts/sdk/Nox.sol";
@@ -20,6 +21,7 @@ contract ERC7984FactoringVault is Ownable2Step, Pausable, ReentrancyGuard, IERC7
     IIdentityRegistry public immutable identityRegistry;
     InvoiceRegistry public immutable invoiceRegistry;
     IServicingRouter public servicingRouter;
+    RiskManager public riskManager;
 
     address public operator;
 
@@ -38,6 +40,7 @@ contract ERC7984FactoringVault is Ownable2Step, Pausable, ReentrancyGuard, IERC7
 
     event OperatorUpdated(address indexed operator);
     event ServicingRouterUpdated(address indexed servicingRouter);
+    event RiskManagerUpdated(address indexed riskManager);
     event DepositReceived(address indexed investor, bytes32 amountHandle);
     event RepaymentReceived(uint256 indexed invoiceId, bytes32 amountHandle);
     event RedeemRequested(uint256 indexed requestId, address indexed investor, bytes32 sharesHandle);
@@ -77,6 +80,11 @@ contract ERC7984FactoringVault is Ownable2Step, Pausable, ReentrancyGuard, IERC7
     function setServicingRouter(IServicingRouter newServicingRouter) external onlyOwner {
         servicingRouter = newServicingRouter;
         emit ServicingRouterUpdated(address(newServicingRouter));
+    }
+
+    function setRiskManager(RiskManager newRiskManager) external onlyOwner {
+        riskManager = newRiskManager;
+        emit RiskManagerUpdated(address(newRiskManager));
     }
 
     function requestRedeem(
@@ -138,14 +146,44 @@ contract ERC7984FactoringVault is Ownable2Step, Pausable, ReentrancyGuard, IERC7
         externalEuint256 amountHandle,
         bytes calldata amountProof
     ) external whenNotPaused nonReentrant {
+        require(address(riskManager) == address(0));
         require(msg.sender == operator);
         euint256 amount = Nox.fromExternal(amountHandle, amountProof);
-        InvoiceRegistry.Invoice memory inv = invoiceRegistry.getInvoice(invoiceId);
-        require(inv.status == InvoiceRegistry.Status.Created);
+        (InvoiceRegistry.Status status, , address settlementRecipient) = invoiceRegistry.getFundingData(invoiceId);
+        require(status == InvoiceRegistry.Status.Created);
 
         Nox.allowTransient(amount, address(cashToken));
-        euint256 transferred = cashToken.confidentialTransfer(inv.settlementRecipient, amount);
+        euint256 transferred = cashToken.confidentialTransfer(settlementRecipient, amount);
         invoiceRegistry.markFundedEncrypted(invoiceId, transferred);
+        emit InvoiceFunded(invoiceId, euint256.unwrap(transferred));
+    }
+
+    function fundInvoice(
+        uint256 invoiceId,
+        externalEuint256 amountHandle,
+        bytes calldata amountProof,
+        bytes calldata riskProofsBundle
+    ) external whenNotPaused nonReentrant {
+        require(address(riskManager) != address(0));
+        require(msg.sender == operator);
+
+        euint256 amount = Nox.fromExternal(amountHandle, amountProof);
+        (InvoiceRegistry.Status status, address issuer, address settlementRecipient) = invoiceRegistry.getFundingData(
+            invoiceId
+        );
+        require(status == InvoiceRegistry.Status.Created);
+
+        (euint256 newIssuerOut, euint256 newPoolOut) = riskManager.verifyConfidentialFunding(
+            issuer,
+            amount,
+            riskProofsBundle
+        );
+
+        Nox.allowTransient(amount, address(cashToken));
+        euint256 transferred = cashToken.confidentialTransfer(settlementRecipient, amount);
+        invoiceRegistry.markFundedEncrypted(invoiceId, transferred);
+
+        riskManager.commitConfidentialFunding(issuer, transferred, newIssuerOut, newPoolOut);
         emit InvoiceFunded(invoiceId, euint256.unwrap(transferred));
     }
 

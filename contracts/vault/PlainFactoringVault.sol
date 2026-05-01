@@ -9,6 +9,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IIdentityRegistry} from "../identity/IIdentityRegistry.sol";
 import {InvoiceRegistry} from "../invoice/InvoiceRegistry.sol";
+import {RiskManager} from "../risk/RiskManager.sol";
 
 contract PlainFactoringVault is Ownable2Step, Pausable, ReentrancyGuard {
     using SafeERC20 for IERC20;
@@ -19,6 +20,7 @@ contract PlainFactoringVault is Ownable2Step, Pausable, ReentrancyGuard {
     IERC20 public immutable asset;
     IIdentityRegistry public immutable identityRegistry;
     InvoiceRegistry public immutable invoiceRegistry;
+    RiskManager public riskManager;
 
     uint256 public totalShares;
     mapping(address => uint256) public sharesOf;
@@ -39,6 +41,7 @@ contract PlainFactoringVault is Ownable2Step, Pausable, ReentrancyGuard {
     event RedeemFulfilled(uint256 indexed requestId, uint256 sharesBurned, uint256 amountOut);
     event InvoiceFunded(uint256 indexed invoiceId, uint256 amount);
     event InvoiceRepaid(uint256 indexed invoiceId, uint256 amount);
+    event RiskManagerUpdated(address indexed riskManager);
 
     constructor(IERC20 _asset, IIdentityRegistry _identityRegistry, InvoiceRegistry _invoiceRegistry)
         Ownable(msg.sender)
@@ -54,6 +57,11 @@ contract PlainFactoringVault is Ownable2Step, Pausable, ReentrancyGuard {
 
     function unpause() external onlyOwner {
         _unpause();
+    }
+
+    function setRiskManager(RiskManager newRiskManager) external onlyOwner {
+        riskManager = newRiskManager;
+        emit RiskManagerUpdated(address(newRiskManager));
     }
 
     function deposit(uint256 amount) external whenNotPaused nonReentrant {
@@ -108,6 +116,9 @@ contract PlainFactoringVault is Ownable2Step, Pausable, ReentrancyGuard {
         require(amount != 0);
         InvoiceRegistry.Invoice memory inv = invoiceRegistry.getInvoice(invoiceId);
         require(inv.status == InvoiceRegistry.Status.Created);
+        if (address(riskManager) != address(0)) {
+            riskManager.consumePlainFunding(inv.issuer, amount);
+        }
         asset.safeTransfer(inv.settlementRecipient, amount);
         invoiceRegistry.markFunded(invoiceId, amount);
         emit InvoiceFunded(invoiceId, amount);
@@ -116,7 +127,11 @@ contract PlainFactoringVault is Ownable2Step, Pausable, ReentrancyGuard {
     function repayInvoice(uint256 invoiceId, uint256 amount) external whenNotPaused nonReentrant {
         require(amount != 0);
         asset.safeTransferFrom(msg.sender, address(this), amount);
+        InvoiceRegistry.Invoice memory inv = invoiceRegistry.getInvoice(invoiceId);
         invoiceRegistry.markRepaid(invoiceId, amount);
+        if (address(riskManager) != address(0)) {
+            riskManager.recordPlainRepayment(inv.issuer, amount);
+        }
         emit InvoiceRepaid(invoiceId, amount);
     }
 }

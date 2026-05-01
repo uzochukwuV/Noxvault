@@ -86,6 +86,13 @@ contract InvoiceRegistry is Ownable2Step {
         return _invoices[invoiceId];
     }
 
+    function getFundingData(
+        uint256 invoiceId
+    ) external view returns (Status status, address issuer, address settlementRecipient) {
+        Invoice storage inv = _invoices[invoiceId];
+        return (inv.status, inv.issuer, inv.settlementRecipient);
+    }
+
     function createInvoice(
         uint256 faceValue,
         uint64 dueDate,
