@@ -149,7 +149,7 @@ contract ERC7984FactoringVault is Ownable2Step, Pausable, ReentrancyGuard, IERC7
         require(address(riskManager) == address(0));
         require(msg.sender == operator);
         euint256 amount = Nox.fromExternal(amountHandle, amountProof);
-        (InvoiceRegistry.Status status, , address settlementRecipient) = invoiceRegistry.getFundingData(invoiceId);
+        (InvoiceRegistry.Status status, , address settlementRecipient, , , ) = invoiceRegistry.getFundingData(invoiceId);
         require(status == InvoiceRegistry.Status.Created);
 
         Nox.allowTransient(amount, address(cashToken));
@@ -168,23 +168,43 @@ contract ERC7984FactoringVault is Ownable2Step, Pausable, ReentrancyGuard, IERC7
         require(msg.sender == operator);
 
         euint256 amount = Nox.fromExternal(amountHandle, amountProof);
-        (InvoiceRegistry.Status status, address issuer, address settlementRecipient) = invoiceRegistry.getFundingData(
-            invoiceId
-        );
+        (
+            InvoiceRegistry.Status status,
+            address issuer,
+            address settlementRecipient,
+            bytes32 obligorHash,
+            bytes32 obligorGroupHash,
+            uint8 riskTier
+        ) = invoiceRegistry.getFundingData(invoiceId);
         require(status == InvoiceRegistry.Status.Created);
+        euint256 transferred = _transferOut(settlementRecipient, amount);
+        invoiceRegistry.markFundedEncrypted(invoiceId, transferred);
+        _riskCommitAfterTransfer(issuer, obligorHash, obligorGroupHash, riskTier, transferred, riskProofsBundle);
+        emit InvoiceFunded(invoiceId, euint256.unwrap(transferred));
+    }
 
+    function _transferOut(address to, euint256 amount) private returns (euint256 transferred) {
+        Nox.allowTransient(amount, address(cashToken));
+        transferred = cashToken.confidentialTransfer(to, amount);
+    }
+
+    function _riskCommitAfterTransfer(
+        address issuer,
+        bytes32 obligorHash,
+        bytes32 obligorGroupHash,
+        uint8 riskTier,
+        euint256 transferred,
+        bytes calldata riskProofsBundle
+    ) private {
         (euint256 newIssuerOut, euint256 newPoolOut) = riskManager.verifyConfidentialFunding(
             issuer,
-            amount,
+            obligorHash,
+            obligorGroupHash,
+            riskTier,
+            transferred,
             riskProofsBundle
         );
-
-        Nox.allowTransient(amount, address(cashToken));
-        euint256 transferred = cashToken.confidentialTransfer(settlementRecipient, amount);
-        invoiceRegistry.markFundedEncrypted(invoiceId, transferred);
-
         riskManager.commitConfidentialFunding(issuer, transferred, newIssuerOut, newPoolOut);
-        emit InvoiceFunded(invoiceId, euint256.unwrap(transferred));
     }
 
     function onConfidentialTransferReceived(

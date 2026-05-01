@@ -9,6 +9,9 @@ interface IConfidentialInvoiceProofVerifier {
         address settlementRecipient;
         bytes32 metadataHash;
         bytes32 invoiceRef;
+        bytes32 obligorHash;
+        bytes32 obligorGroupHash;
+        uint8 riskTier;
     }
 
     function verify(
@@ -16,4 +19,3 @@ interface IConfidentialInvoiceProofVerifier {
         bytes calldata proof
     ) external view returns (bool);
 }
-

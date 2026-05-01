@@ -5,6 +5,7 @@ import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Nox, ebool, euint256, externalEuint256} from "@iexec-nox/nox-protocol-contracts/contracts/sdk/Nox.sol";
 import {INoxCompute} from "@iexec-nox/nox-protocol-contracts/contracts/interfaces/INoxCompute.sol";
+import {RiskPolicyPack} from "./RiskPolicyPack.sol";
 
 contract RiskManager is Ownable2Step {
     euint256 public poolCapEncrypted;
@@ -24,10 +25,14 @@ contract RiskManager is Ownable2Step {
     address public confidentialVault;
     address public plainVault;
     address public servicingRouter;
+    address public invoiceRegistry;
+    RiskPolicyPack public policyPack;
 
     event ConfidentialVaultUpdated(address indexed vault);
     event PlainVaultUpdated(address indexed vault);
     event ServicingRouterUpdated(address indexed router);
+    event InvoiceRegistryUpdated(address indexed invoiceRegistry);
+    event PolicyPackUpdated(address indexed policyPack);
 
     event PoolCapPlainUpdated(uint256 cap);
     event IssuerCapPlainUpdated(address indexed issuer, uint256 cap);
@@ -71,6 +76,16 @@ contract RiskManager is Ownable2Step {
     function setServicingRouter(address router) external onlyOwner {
         servicingRouter = router;
         emit ServicingRouterUpdated(router);
+    }
+
+    function setInvoiceRegistry(address newInvoiceRegistry) external onlyOwner {
+        invoiceRegistry = newInvoiceRegistry;
+        emit InvoiceRegistryUpdated(newInvoiceRegistry);
+    }
+
+    function setPolicyPack(RiskPolicyPack newPolicyPack) external onlyOwner {
+        policyPack = newPolicyPack;
+        emit PolicyPackUpdated(address(newPolicyPack));
     }
 
     function setPoolCapPlain(uint256 cap) external onlyOwner {
@@ -134,7 +149,7 @@ contract RiskManager is Ownable2Step {
         emit IssuerCapEncryptedUpdated(issuer, euint256.unwrap(issuerCapEncrypted[issuer]));
     }
 
-    function consumePlainFunding(address issuer, uint256 amount) external {
+    function consumePlainFunding(address issuer, uint256 amount) public {
         if (msg.sender != plainVault) revert Unauthorized(msg.sender);
         if (amount == 0) revert RiskLimitExceeded();
         if (invoiceCapPlain != 0 && amount > invoiceCapPlain) revert RiskLimitExceeded();
@@ -147,7 +162,21 @@ contract RiskManager is Ownable2Step {
         emit PlainFundingConsumed(issuer, amount, issuerOutstandingPlain[issuer], poolOutstandingPlain);
     }
 
-    function recordPlainRepayment(address issuer, uint256 amount) external {
+    function consumePlainFunding(
+        address issuer,
+        bytes32 obligorHash,
+        bytes32 obligorGroupHash,
+        uint8 riskTier,
+        uint256 amount
+    ) external {
+        consumePlainFunding(issuer, amount);
+        RiskPolicyPack pack = policyPack;
+        if (address(pack) != address(0)) {
+            pack.consumePlainFunding(issuer, obligorHash, obligorGroupHash, riskTier, amount);
+        }
+    }
+
+    function recordPlainRepayment(address issuer, uint256 amount) public {
         if (msg.sender != plainVault) revert Unauthorized(msg.sender);
         if (amount == 0) revert RiskLimitExceeded();
 
@@ -158,6 +187,20 @@ contract RiskManager is Ownable2Step {
         poolOutstandingPlain = amount >= poolOut ? 0 : poolOut - amount;
 
         emit PlainRepaymentRecorded(issuer, amount, issuerOutstandingPlain[issuer], poolOutstandingPlain);
+    }
+
+    function recordPlainRepayment(
+        address issuer,
+        bytes32 obligorHash,
+        bytes32 obligorGroupHash,
+        uint8 riskTier,
+        uint256 amount
+    ) external {
+        recordPlainRepayment(issuer, amount);
+        RiskPolicyPack pack = policyPack;
+        if (address(pack) != address(0)) {
+            pack.recordPlainRepayment(issuer, obligorHash, obligorGroupHash, riskTier, amount);
+        }
     }
 
     function checkConfidentialFunding(
@@ -179,23 +222,46 @@ contract RiskManager is Ownable2Step {
 
     function verifyConfidentialFunding(
         address issuer,
+        bytes32 obligorHash,
+        bytes32 obligorGroupHash,
+        uint8 riskTier,
         euint256 amount,
         bytes calldata proofsBundle
     ) external returns (euint256 newIssuerOutstanding, euint256 newPoolOutstanding) {
         if (msg.sender != confidentialVault) revert Unauthorized(msg.sender);
 
-        (bytes memory issuerOkProof, bytes memory poolOkProof, bytes memory invoiceOkProof) = abi.decode(
-            proofsBundle,
-            (bytes, bytes, bytes)
-        );
-        (ebool issuerOk, ebool poolOk, ebool invoiceOk, euint256 issuerOut, euint256 poolOut) = _checkConfidentialFunding(
-            issuer,
-            amount
-        );
-        require(_publicDecryptBool(issuerOk, issuerOkProof));
-        require(_publicDecryptBool(poolOk, poolOkProof));
-        require(_publicDecryptBool(invoiceOk, invoiceOkProof));
-        return (issuerOut, poolOut);
+        bytes[] memory proofs = abi.decode(proofsBundle, (bytes[]));
+        require(proofs.length == 6);
+        newIssuerOutstanding = Nox.add(issuerOutstandingEncrypted[issuer], amount);
+        newPoolOutstanding = Nox.add(poolOutstandingEncrypted, amount);
+
+        ebool ok = Nox.le(newIssuerOutstanding, issuerCapEncrypted[issuer]);
+        Nox.allowPublicDecryption(ok);
+        require(_publicDecryptBool(ok, proofs[0]));
+
+        ok = Nox.le(newPoolOutstanding, poolCapEncrypted);
+        Nox.allowPublicDecryption(ok);
+        require(_publicDecryptBool(ok, proofs[1]));
+
+        ok = Nox.le(amount, invoiceCapEncrypted);
+        Nox.allowPublicDecryption(ok);
+        require(_publicDecryptBool(ok, proofs[2]));
+
+        Nox.allowThis(newIssuerOutstanding);
+        Nox.allowThis(newPoolOutstanding);
+        Nox.allow(newIssuerOutstanding, confidentialVault);
+        Nox.allow(newPoolOutstanding, confidentialVault);
+
+        if (address(policyPack) != address(0)) {
+            policyPack.enforceAndCommitConfidentialFunding(
+                issuer,
+                obligorHash,
+                obligorGroupHash,
+                riskTier,
+                amount,
+                proofsBundle
+            );
+        }
     }
 
     function _publicDecryptBool(ebool handle, bytes memory decryptionProof) private view returns (bool) {
@@ -273,7 +339,13 @@ contract RiskManager is Ownable2Step {
         );
     }
 
-    function commitConfidentialRepayment(address issuer, euint256 amount) external {
+    function commitConfidentialRepayment(
+        address issuer,
+        bytes32 obligorHash,
+        bytes32 obligorGroupHash,
+        uint8 riskTier,
+        euint256 amount
+    ) external {
         if (msg.sender != servicingRouter) revert Unauthorized(msg.sender);
 
         euint256 issuerOut = issuerOutstandingEncrypted[issuer];
@@ -296,5 +368,26 @@ contract RiskManager is Ownable2Step {
             euint256.unwrap(newIssuerOutstanding),
             euint256.unwrap(newPoolOutstanding)
         );
+
+        RiskPolicyPack pack = policyPack;
+        if (address(pack) != address(0)) {
+            pack.commitConfidentialRepayment(issuer, obligorHash, obligorGroupHash, riskTier, amount);
+        }
+    }
+
+    function migratePlainTier(uint8 fromTier, uint8 toTier, uint256 amount) external {
+        if (msg.sender != invoiceRegistry) revert Unauthorized(msg.sender);
+        RiskPolicyPack pack = policyPack;
+        if (address(pack) != address(0)) {
+            pack.migratePlainTier(fromTier, toTier, amount);
+        }
+    }
+
+    function migrateConfidentialTier(uint8 fromTier, uint8 toTier, euint256 amount) external {
+        if (msg.sender != invoiceRegistry) revert Unauthorized(msg.sender);
+        RiskPolicyPack pack = policyPack;
+        if (address(pack) != address(0)) {
+            pack.migrateConfidentialTier(fromTier, toTier, amount);
+        }
     }
 }

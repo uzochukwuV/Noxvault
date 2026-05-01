@@ -10,7 +10,6 @@ contract MockNoxCompute {
     mapping(bytes32 => bool) private _publicDecryptable;
     mapping(bytes32 => mapping(address => bool)) private _allowed;
     mapping(bytes32 => mapping(address => bool)) private _allowedTransient;
-    uint256 private _nonce;
 
     function wrapAsPublicHandle(bytes32 value, TEEType teeType) external returns (bytes32) {
         bytes32 handle = _newHandle(value, teeType, true);
@@ -149,7 +148,7 @@ contract MockNoxCompute {
     }
 
     function _newHandle(bytes32 value, TEEType teeType, bool isPublic) private returns (bytes32 handle) {
-        bytes32 h = keccak256(abi.encodePacked(block.chainid, teeType, value, address(this), ++_nonce));
+        bytes32 h = keccak256(abi.encodePacked(block.chainid, teeType, value, isPublic));
         uint256 u = uint256(h);
         if (isPublic) {
             u &= ~(uint256(1) << (8 * (31 - 6)));
