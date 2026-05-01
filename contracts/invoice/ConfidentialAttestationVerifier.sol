@@ -51,6 +51,7 @@ contract ConfidentialAttestationVerifier is Ownable2Step, IConfidentialInvoicePr
                 ctx.metadataHash,
                 ctx.invoiceRef,
                 ctx.obligorHash,
+                ctx.obligorGroupHash,
                 ctx.riskTier
             )
         );

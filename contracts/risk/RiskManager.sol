@@ -25,11 +25,13 @@ contract RiskManager is Ownable2Step {
     address public confidentialVault;
     address public plainVault;
     address public servicingRouter;
+    address public invoiceRegistry;
     RiskPolicyPack public policyPack;
 
     event ConfidentialVaultUpdated(address indexed vault);
     event PlainVaultUpdated(address indexed vault);
     event ServicingRouterUpdated(address indexed router);
+    event InvoiceRegistryUpdated(address indexed invoiceRegistry);
     event PolicyPackUpdated(address indexed policyPack);
 
     event PoolCapPlainUpdated(uint256 cap);
@@ -74,6 +76,11 @@ contract RiskManager is Ownable2Step {
     function setServicingRouter(address router) external onlyOwner {
         servicingRouter = router;
         emit ServicingRouterUpdated(router);
+    }
+
+    function setInvoiceRegistry(address newInvoiceRegistry) external onlyOwner {
+        invoiceRegistry = newInvoiceRegistry;
+        emit InvoiceRegistryUpdated(newInvoiceRegistry);
     }
 
     function setPolicyPack(RiskPolicyPack newPolicyPack) external onlyOwner {
@@ -155,11 +162,17 @@ contract RiskManager is Ownable2Step {
         emit PlainFundingConsumed(issuer, amount, issuerOutstandingPlain[issuer], poolOutstandingPlain);
     }
 
-    function consumePlainFunding(address issuer, bytes32 obligorHash, uint8 riskTier, uint256 amount) external {
+    function consumePlainFunding(
+        address issuer,
+        bytes32 obligorHash,
+        bytes32 obligorGroupHash,
+        uint8 riskTier,
+        uint256 amount
+    ) external {
         consumePlainFunding(issuer, amount);
         RiskPolicyPack pack = policyPack;
         if (address(pack) != address(0)) {
-            pack.consumePlainFunding(issuer, obligorHash, riskTier, amount);
+            pack.consumePlainFunding(issuer, obligorHash, obligorGroupHash, riskTier, amount);
         }
     }
 
@@ -176,11 +189,17 @@ contract RiskManager is Ownable2Step {
         emit PlainRepaymentRecorded(issuer, amount, issuerOutstandingPlain[issuer], poolOutstandingPlain);
     }
 
-    function recordPlainRepayment(address issuer, bytes32 obligorHash, uint8 riskTier, uint256 amount) external {
+    function recordPlainRepayment(
+        address issuer,
+        bytes32 obligorHash,
+        bytes32 obligorGroupHash,
+        uint8 riskTier,
+        uint256 amount
+    ) external {
         recordPlainRepayment(issuer, amount);
         RiskPolicyPack pack = policyPack;
         if (address(pack) != address(0)) {
-            pack.recordPlainRepayment(issuer, obligorHash, riskTier, amount);
+            pack.recordPlainRepayment(issuer, obligorHash, obligorGroupHash, riskTier, amount);
         }
     }
 
@@ -204,6 +223,7 @@ contract RiskManager is Ownable2Step {
     function verifyConfidentialFunding(
         address issuer,
         bytes32 obligorHash,
+        bytes32 obligorGroupHash,
         uint8 riskTier,
         euint256 amount,
         bytes calldata proofsBundle
@@ -211,25 +231,37 @@ contract RiskManager is Ownable2Step {
         if (msg.sender != confidentialVault) revert Unauthorized(msg.sender);
 
         bytes[] memory proofs = abi.decode(proofsBundle, (bytes[]));
-        require(proofs.length == 5);
-        (ebool issuerOk, ebool poolOk, ebool invoiceOk, euint256 issuerOut, euint256 poolOut) = _checkConfidentialFunding(
-            issuer,
-            amount
-        );
-        require(_publicDecryptBool(issuerOk, proofs[0]));
-        require(_publicDecryptBool(poolOk, proofs[1]));
-        require(_publicDecryptBool(invoiceOk, proofs[2]));
+        require(proofs.length == 6);
+        newIssuerOutstanding = Nox.add(issuerOutstandingEncrypted[issuer], amount);
+        newPoolOutstanding = Nox.add(poolOutstandingEncrypted, amount);
+
+        ebool ok = Nox.le(newIssuerOutstanding, issuerCapEncrypted[issuer]);
+        Nox.allowPublicDecryption(ok);
+        require(_publicDecryptBool(ok, proofs[0]));
+
+        ok = Nox.le(newPoolOutstanding, poolCapEncrypted);
+        Nox.allowPublicDecryption(ok);
+        require(_publicDecryptBool(ok, proofs[1]));
+
+        ok = Nox.le(amount, invoiceCapEncrypted);
+        Nox.allowPublicDecryption(ok);
+        require(_publicDecryptBool(ok, proofs[2]));
+
+        Nox.allowThis(newIssuerOutstanding);
+        Nox.allowThis(newPoolOutstanding);
+        Nox.allow(newIssuerOutstanding, confidentialVault);
+        Nox.allow(newPoolOutstanding, confidentialVault);
 
         if (address(policyPack) != address(0)) {
             policyPack.enforceAndCommitConfidentialFunding(
                 issuer,
                 obligorHash,
+                obligorGroupHash,
                 riskTier,
                 amount,
-                abi.encode(proofs[3], proofs[4])
+                proofsBundle
             );
         }
-        return (issuerOut, poolOut);
     }
 
     function _publicDecryptBool(ebool handle, bytes memory decryptionProof) private view returns (bool) {
@@ -307,7 +339,13 @@ contract RiskManager is Ownable2Step {
         );
     }
 
-    function commitConfidentialRepayment(address issuer, bytes32 obligorHash, uint8 riskTier, euint256 amount) external {
+    function commitConfidentialRepayment(
+        address issuer,
+        bytes32 obligorHash,
+        bytes32 obligorGroupHash,
+        uint8 riskTier,
+        euint256 amount
+    ) external {
         if (msg.sender != servicingRouter) revert Unauthorized(msg.sender);
 
         euint256 issuerOut = issuerOutstandingEncrypted[issuer];
@@ -333,7 +371,23 @@ contract RiskManager is Ownable2Step {
 
         RiskPolicyPack pack = policyPack;
         if (address(pack) != address(0)) {
-            pack.commitConfidentialRepayment(issuer, obligorHash, riskTier, amount);
+            pack.commitConfidentialRepayment(issuer, obligorHash, obligorGroupHash, riskTier, amount);
+        }
+    }
+
+    function migratePlainTier(uint8 fromTier, uint8 toTier, uint256 amount) external {
+        if (msg.sender != invoiceRegistry) revert Unauthorized(msg.sender);
+        RiskPolicyPack pack = policyPack;
+        if (address(pack) != address(0)) {
+            pack.migratePlainTier(fromTier, toTier, amount);
+        }
+    }
+
+    function migrateConfidentialTier(uint8 fromTier, uint8 toTier, euint256 amount) external {
+        if (msg.sender != invoiceRegistry) revert Unauthorized(msg.sender);
+        RiskPolicyPack pack = policyPack;
+        if (address(pack) != address(0)) {
+            pack.migrateConfidentialTier(fromTier, toTier, amount);
         }
     }
 }

@@ -48,6 +48,7 @@ contract AttestationVerifier is Ownable2Step, IInvoiceProofVerifier {
                 ctx.metadataHash,
                 ctx.invoiceRef,
                 ctx.obligorHash,
+                ctx.obligorGroupHash,
                 ctx.riskTier
             )
         );

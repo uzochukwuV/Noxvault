@@ -14,7 +14,7 @@ contract ConfidentialEcdsaAuditorVerifier is
 {
     bytes32 private constant _TYPEHASH =
         keccak256(
-            "ConfidentialInvoiceProof(address issuer,bytes32 faceValueHandle,uint64 dueDate,address settlementRecipient,bytes32 metadataHash,bytes32 invoiceRef,bytes32 obligorHash,uint8 riskTier,uint64 validUntil)"
+            "ConfidentialInvoiceProof(address issuer,bytes32 faceValueHandle,uint64 dueDate,address settlementRecipient,bytes32 metadataHash,bytes32 invoiceRef,bytes32 obligorHash,bytes32 obligorGroupHash,uint8 riskTier,uint64 validUntil)"
         );
 
     mapping(address => bool) public isAuditor;
@@ -45,6 +45,7 @@ contract ConfidentialEcdsaAuditorVerifier is
                 ctx.metadataHash,
                 ctx.invoiceRef,
                 ctx.obligorHash,
+                ctx.obligorGroupHash,
                 ctx.riskTier,
                 validUntil
             )

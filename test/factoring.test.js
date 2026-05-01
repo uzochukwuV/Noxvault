@@ -73,6 +73,7 @@ async function compile(roots) {
     language: "Solidity",
     sources,
     settings: {
+      viaIR: true,
       optimizer: { enabled: true, runs: 200 },
       outputSelection: { "*": { "*": ["abi", "evm.bytecode.object", "evm.deployedBytecode.object"] } },
     },
@@ -167,6 +168,7 @@ describe("Box / Nox factoring vault", function () {
     const invoiceRef1 = ethers.keccak256(ethers.toUtf8Bytes("inv-ecdsa-1"));
     const invoiceRef2 = ethers.keccak256(ethers.toUtf8Bytes("inv-attest-1"));
     const obligorHash = ethers.keccak256(ethers.toUtf8Bytes("obligor-acme-lei-123"));
+    const obligorGroupHash = ethers.keccak256(ethers.toUtf8Bytes("obligor-group-acme-holdco"));
     const riskTier = 2;
 
     const chainId = (await ethers.provider.getNetwork()).chainId;
@@ -180,6 +182,7 @@ describe("Box / Nox factoring vault", function () {
         { name: "metadataHash", type: "bytes32" },
         { name: "invoiceRef", type: "bytes32" },
         { name: "obligorHash", type: "bytes32" },
+        { name: "obligorGroupHash", type: "bytes32" },
         { name: "riskTier", type: "uint8" },
         { name: "validUntil", type: "uint64" },
       ],
@@ -194,6 +197,7 @@ describe("Box / Nox factoring vault", function () {
       metadataHash,
       invoiceRef: invoiceRef1,
       obligorHash,
+      obligorGroupHash,
       riskTier,
       validUntil,
     });
@@ -208,6 +212,7 @@ describe("Box / Nox factoring vault", function () {
         metadataHash,
         invoiceRef1,
         obligorHash,
+        obligorGroupHash,
         riskTier,
         await ecdsaVerifier.getAddress(),
         ecdsaProof,
@@ -224,8 +229,18 @@ describe("Box / Nox factoring vault", function () {
       .find((d) => d && d.name === "InvoiceCreated").args.invoiceId;
 
     const ctxHash = keccakAbi(
-      ["address", "uint256", "uint64", "address", "bytes32", "bytes32", "bytes32", "uint8"],
-      [issuer.address, faceValue, dueDate, settlementRecipient, metadataHash, invoiceRef2, obligorHash, riskTier],
+      ["address", "uint256", "uint64", "address", "bytes32", "bytes32", "bytes32", "bytes32", "uint8"],
+      [
+        issuer.address,
+        faceValue,
+        dueDate,
+        settlementRecipient,
+        metadataHash,
+        invoiceRef2,
+        obligorHash,
+        obligorGroupHash,
+        riskTier,
+      ],
     );
     const expirationTime = BigInt(Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60);
     const uid = await attestations.connect(attester).attest.staticCall(schemaId, issuer.address, ctxHash, expirationTime);
@@ -241,6 +256,7 @@ describe("Box / Nox factoring vault", function () {
         metadataHash,
         invoiceRef2,
         obligorHash,
+        obligorGroupHash,
         riskTier,
         await attestationVerifier.getAddress(),
         attestationProof,
@@ -324,6 +340,7 @@ describe("Box / Nox factoring vault", function () {
     const metadataHash = ethers.keccak256(ethers.toUtf8Bytes("invoice-metadata-confidential"));
     const invoiceRef = ethers.keccak256(ethers.toUtf8Bytes("inv-conf-1"));
     const obligorHash = ethers.keccak256(ethers.toUtf8Bytes("obligor-acme-lei-123"));
+    const obligorGroupHash = ethers.keccak256(ethers.toUtf8Bytes("obligor-group-acme-holdco"));
     const riskTier = 2;
 
     const chainId = (await ethers.provider.getNetwork()).chainId;
@@ -342,6 +359,7 @@ describe("Box / Nox factoring vault", function () {
         { name: "metadataHash", type: "bytes32" },
         { name: "invoiceRef", type: "bytes32" },
         { name: "obligorHash", type: "bytes32" },
+        { name: "obligorGroupHash", type: "bytes32" },
         { name: "riskTier", type: "uint8" },
         { name: "validUntil", type: "uint64" },
       ],
@@ -355,6 +373,7 @@ describe("Box / Nox factoring vault", function () {
       metadataHash,
       invoiceRef,
       obligorHash,
+      obligorGroupHash,
       riskTier,
       validUntil,
     });
@@ -370,6 +389,7 @@ describe("Box / Nox factoring vault", function () {
         metadataHash,
         invoiceRef,
         obligorHash,
+        obligorGroupHash,
         riskTier,
         await verifier.getAddress(),
         proof,
@@ -438,9 +458,13 @@ describe("Box / Nox factoring vault", function () {
     await risk.setInvoiceCapEncryptedPublic(1_500_000n);
     const pack = await deploy(artifacts, "RiskPolicyPack", deployer);
     await pack.setRiskManager(await risk.getAddress());
-    await pack.setIssuerObligorCapPlain(issuer.address, ethers.keccak256(ethers.toUtf8Bytes("obligor-acme-lei-123")), 0n);
+    const obligorHashKey = ethers.keccak256(ethers.toUtf8Bytes("obligor-acme-lei-123"));
+    const obligorGroupHashKey = ethers.keccak256(ethers.toUtf8Bytes("obligor-group-acme-holdco"));
+    await pack.setIssuerObligorCapPlain(issuer.address, obligorHashKey, 0n);
+    await pack.setIssuerGroupCapPlain(issuer.address, obligorGroupHashKey, 0n);
     await pack.setTierCapPlain(2, 0n);
-    await pack.setIssuerObligorCapEncryptedPublic(issuer.address, ethers.keccak256(ethers.toUtf8Bytes("obligor-acme-lei-123")), 2_000_000n);
+    await pack.setIssuerObligorCapEncryptedPublic(issuer.address, obligorHashKey, 2_000_000n);
+    await pack.setIssuerGroupCapEncryptedPublic(issuer.address, obligorGroupHashKey, 2_000_000n);
     await pack.setTierCapEncryptedPublic(2, 2_000_000n);
     await risk.setPolicyPack(await pack.getAddress());
     const disclosure = await deploy(artifacts, "DisclosureManager", deployer);
@@ -459,6 +483,8 @@ describe("Box / Nox factoring vault", function () {
     await vault.setRiskManager(await risk.getAddress());
     await risk.setConfidentialVault(await vault.getAddress());
     await servicing.setRiskManager(await risk.getAddress());
+    await invoices.setRiskManager(await risk.getAddress());
+    await risk.setInvoiceRegistry(await invoices.getAddress());
 
     const mockCompute = new ethers.Contract(NOX_COMPUTE_31337, artifacts.get("MockNoxCompute").abi, issuer);
     const faceValue = 1_000_000n;
@@ -474,6 +500,7 @@ describe("Box / Nox factoring vault", function () {
     const metadataHash = ethers.keccak256(ethers.toUtf8Bytes("invoice-metadata-confidential-erc7984"));
     const invoiceRef = ethers.keccak256(ethers.toUtf8Bytes("inv-conf-erc7984-1"));
     const obligorHash = ethers.keccak256(ethers.toUtf8Bytes("obligor-acme-lei-123"));
+    const obligorGroupHash = ethers.keccak256(ethers.toUtf8Bytes("obligor-group-acme-holdco"));
     const riskTier = 2;
 
     const chainId = (await ethers.provider.getNetwork()).chainId;
@@ -492,6 +519,7 @@ describe("Box / Nox factoring vault", function () {
         { name: "metadataHash", type: "bytes32" },
         { name: "invoiceRef", type: "bytes32" },
         { name: "obligorHash", type: "bytes32" },
+        { name: "obligorGroupHash", type: "bytes32" },
         { name: "riskTier", type: "uint8" },
         { name: "validUntil", type: "uint64" },
       ],
@@ -505,6 +533,7 @@ describe("Box / Nox factoring vault", function () {
       metadataHash,
       invoiceRef,
       obligorHash,
+      obligorGroupHash,
       riskTier,
       validUntil,
     });
@@ -520,6 +549,7 @@ describe("Box / Nox factoring vault", function () {
         metadataHash,
         invoiceRef,
         obligorHash,
+        obligorGroupHash,
         riskTier,
         await verifier.getAddress(),
         proof,
@@ -551,9 +581,29 @@ describe("Box / Nox factoring vault", function () {
     );
     const riskBundle = abi.encode(
       ["bytes[]"],
-      [["0x01", "0x01", "0x01", "0x01", "0x01"]],
+      [["0x01", "0x01", "0x01", "0x01", "0x01", "0x01"]],
     );
     await vault.connect(operator)["fundInvoice(uint256,bytes32,bytes,bytes)"](invoiceId, fundHandle, "0x", riskBundle);
+
+    await invoices.connect(issuer).requestRiskTierMigration(invoiceId, 3);
+    await invoices.approveRiskTierMigration(invoiceId);
+
+    const tier2HandleAfterMigration = await pack.tierOutstandingEncrypted(2);
+    const tier3HandleAfterMigration = await pack.tierOutstandingEncrypted(3);
+    const tier2ValAfterMigration = BigInt(
+      await mockCompute.validateDecryptionProof(
+        tier2HandleAfterMigration,
+        ethers.zeroPadValue(ethers.toBeHex(0n), 32),
+      ),
+    );
+    const tier3ValAfterMigration = BigInt(
+      await mockCompute.validateDecryptionProof(
+        tier3HandleAfterMigration,
+        ethers.zeroPadValue(ethers.toBeHex(500_000n), 32),
+      ),
+    );
+    expect(tier2ValAfterMigration).to.equal(0n);
+    expect(tier3ValAfterMigration).to.equal(500_000n);
 
     const repayAmount = 200_000n;
     const repayHandle = await operatorCompute.wrapAsPublicHandle(
@@ -579,11 +629,21 @@ describe("Box / Nox factoring vault", function () {
       .find((d) => d && d.name === "PaymentReported").args.paymentId;
     await servicing.finalizePayment(invoiceId, paymentId);
 
+    const tier3HandleAfterRepay = await pack.tierOutstandingEncrypted(3);
+    const tier3ValAfterRepay = BigInt(
+      await mockCompute.validateDecryptionProof(
+        tier3HandleAfterRepay,
+        ethers.zeroPadValue(ethers.toBeHex(300_000n), 32),
+      ),
+    );
+    expect(tier3ValAfterRepay).to.equal(300_000n);
+
     const inv = await invoices.getInvoice(invoiceId);
     expect(inv.confidential).to.equal(true);
     expect(inv.faceValue).to.equal(0n);
     expect(inv.status).to.equal(2n);
     expect(inv.repaidAmountEncrypted).to.not.equal(ethers.ZeroHash);
+    expect(inv.riskTier).to.equal(3);
 
     await disclosure.discloseInvestorShares(await vault.getAddress(), investor.address, auditor.address);
     const sharesHandle = await vault.sharesOf(investor.address);

@@ -10,7 +10,7 @@ import {IInvoiceProofVerifier} from "./IInvoiceProofVerifier.sol";
 contract EcdsaAuditorVerifier is Ownable2Step, EIP712, IInvoiceProofVerifier {
     bytes32 private constant _TYPEHASH =
         keccak256(
-            "InvoiceProof(address issuer,uint256 faceValue,uint64 dueDate,address settlementRecipient,bytes32 metadataHash,bytes32 invoiceRef,bytes32 obligorHash,uint8 riskTier,uint64 validUntil)"
+            "InvoiceProof(address issuer,uint256 faceValue,uint64 dueDate,address settlementRecipient,bytes32 metadataHash,bytes32 invoiceRef,bytes32 obligorHash,bytes32 obligorGroupHash,uint8 riskTier,uint64 validUntil)"
         );
 
     mapping(address => bool) public isAuditor;
@@ -38,6 +38,7 @@ contract EcdsaAuditorVerifier is Ownable2Step, EIP712, IInvoiceProofVerifier {
                 ctx.metadataHash,
                 ctx.invoiceRef,
                 ctx.obligorHash,
+                ctx.obligorGroupHash,
                 ctx.riskTier,
                 validUntil
             )

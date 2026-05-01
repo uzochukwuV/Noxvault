@@ -5,6 +5,7 @@ export default {
     version: "0.8.28",
     path: "./node_modules/solc/soljson.js",
     settings: {
+      viaIR: true,
       optimizer: { enabled: true, runs: 200 },
     },
   },
@@ -15,4 +16,3 @@ export default {
     artifacts: "./artifacts",
   },
 };
-

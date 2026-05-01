@@ -6,6 +6,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IIdentityRegistry} from "../identity/IIdentityRegistry.sol";
 import {IInvoiceProofVerifier} from "./IInvoiceProofVerifier.sol";
 import {IConfidentialInvoiceProofVerifier} from "./IConfidentialInvoiceProofVerifier.sol";
+import {RiskManager} from "../risk/RiskManager.sol";
 import {Nox, euint256, externalEuint256} from "@iexec-nox/nox-protocol-contracts/contracts/sdk/Nox.sol";
 
 contract InvoiceRegistry is Ownable2Step {
@@ -31,6 +32,7 @@ contract InvoiceRegistry is Ownable2Step {
         bytes32 metadataHash;
         bytes32 invoiceRef;
         bytes32 obligorHash;
+        bytes32 obligorGroupHash;
         uint8 riskTier;
         address verifier;
         bool confidential;
@@ -49,9 +51,18 @@ contract InvoiceRegistry is Ownable2Step {
     mapping(bytes32 => bool) public invoiceRefUsed;
     mapping(address => bool) public isVault;
     mapping(address => bool) public isServicer;
+    RiskManager public riskManager;
+
+    struct RiskTierMigrationRequest {
+        uint8 requestedTier;
+        bool pending;
+    }
+
+    mapping(uint256 => RiskTierMigrationRequest) public riskTierMigrationRequests;
 
     event VaultUpdated(address indexed vault, bool allowed);
     event ServicerUpdated(address indexed servicer, bool allowed);
+    event RiskManagerUpdated(address indexed riskManager);
 
     event InvoiceCreated(uint256 indexed invoiceId, bytes32 indexed invoiceRef, address indexed issuer);
     event InvoiceCreatedConfidential(
@@ -69,6 +80,8 @@ contract InvoiceRegistry is Ownable2Step {
     event InvoiceDisputed(uint256 indexed invoiceId);
     event InvoiceDisputeResolved(uint256 indexed invoiceId);
     event InvoiceDefaulted(uint256 indexed invoiceId);
+    event RiskTierMigrationRequested(uint256 indexed invoiceId, uint8 fromTier, uint8 toTier);
+    event RiskTierMigrationApproved(uint256 indexed invoiceId, uint8 fromTier, uint8 toTier);
 
     constructor(IIdentityRegistry _identityRegistry) Ownable(msg.sender) {
         identityRegistry = _identityRegistry;
@@ -84,15 +97,64 @@ contract InvoiceRegistry is Ownable2Step {
         emit ServicerUpdated(servicer, allowed);
     }
 
+    function setRiskManager(RiskManager newRiskManager) external onlyOwner {
+        riskManager = newRiskManager;
+        emit RiskManagerUpdated(address(newRiskManager));
+    }
+
+    function requestRiskTierMigration(uint256 invoiceId, uint8 newTier) external {
+        Invoice storage inv = _invoices[invoiceId];
+        require(inv.issuer == msg.sender);
+        require(newTier != inv.riskTier);
+        riskTierMigrationRequests[invoiceId] = RiskTierMigrationRequest({requestedTier: newTier, pending: true});
+        emit RiskTierMigrationRequested(invoiceId, inv.riskTier, newTier);
+    }
+
+    function approveRiskTierMigration(uint256 invoiceId) external onlyOwner {
+        RiskTierMigrationRequest memory req = riskTierMigrationRequests[invoiceId];
+        require(req.pending);
+
+        Invoice storage inv = _invoices[invoiceId];
+        uint8 fromTier = inv.riskTier;
+        uint8 toTier = req.requestedTier;
+        inv.riskTier = toTier;
+        delete riskTierMigrationRequests[invoiceId];
+
+        RiskManager rm = riskManager;
+        if (address(rm) != address(0)) {
+            if (inv.confidential) {
+                euint256 outstanding = Nox.sub(inv.fundedAmountEncrypted, inv.repaidAmountEncrypted);
+                Nox.allow(outstanding, address(rm));
+                rm.migrateConfidentialTier(fromTier, toTier, outstanding);
+            } else {
+                uint256 outstandingPlain = inv.fundedAmount >= inv.repaidAmount ? inv.fundedAmount - inv.repaidAmount : 0;
+                rm.migratePlainTier(fromTier, toTier, outstandingPlain);
+            }
+        }
+
+        emit RiskTierMigrationApproved(invoiceId, fromTier, toTier);
+    }
+
     function getInvoice(uint256 invoiceId) external view returns (Invoice memory) {
         return _invoices[invoiceId];
     }
 
     function getFundingData(
         uint256 invoiceId
-    ) external view returns (Status status, address issuer, address settlementRecipient, bytes32 obligorHash, uint8 riskTier) {
+    )
+        external
+        view
+        returns (
+            Status status,
+            address issuer,
+            address settlementRecipient,
+            bytes32 obligorHash,
+            bytes32 obligorGroupHash,
+            uint8 riskTier
+        )
+    {
         Invoice storage inv = _invoices[invoiceId];
-        return (inv.status, inv.issuer, inv.settlementRecipient, inv.obligorHash, inv.riskTier);
+        return (inv.status, inv.issuer, inv.settlementRecipient, inv.obligorHash, inv.obligorGroupHash, inv.riskTier);
     }
 
     function createInvoice(
@@ -102,6 +164,7 @@ contract InvoiceRegistry is Ownable2Step {
         bytes32 metadataHash,
         bytes32 invoiceRef,
         bytes32 obligorHash,
+        bytes32 obligorGroupHash,
         uint8 riskTier,
         address verifier,
         bytes calldata proof
@@ -119,6 +182,7 @@ contract InvoiceRegistry is Ownable2Step {
             metadataHash: metadataHash,
             invoiceRef: invoiceRef,
             obligorHash: obligorHash,
+            obligorGroupHash: obligorGroupHash,
             riskTier: riskTier
         });
         require(IInvoiceProofVerifier(verifier).verify(ctx, proof));
@@ -134,6 +198,7 @@ contract InvoiceRegistry is Ownable2Step {
         inv.metadataHash = metadataHash;
         inv.invoiceRef = invoiceRef;
         inv.obligorHash = obligorHash;
+        inv.obligorGroupHash = obligorGroupHash;
         inv.riskTier = riskTier;
         inv.verifier = verifier;
         inv.confidential = false;
@@ -150,6 +215,7 @@ contract InvoiceRegistry is Ownable2Step {
         bytes32 metadataHash,
         bytes32 invoiceRef,
         bytes32 obligorHash,
+        bytes32 obligorGroupHash,
         uint8 riskTier,
         address verifier,
         bytes calldata proof
@@ -171,6 +237,7 @@ contract InvoiceRegistry is Ownable2Step {
                 metadataHash: metadataHash,
                 invoiceRef: invoiceRef,
                 obligorHash: obligorHash,
+                obligorGroupHash: obligorGroupHash,
                 riskTier: riskTier
             });
         require(IConfidentialInvoiceProofVerifier(verifier).verify(ctx, proof));
@@ -186,6 +253,7 @@ contract InvoiceRegistry is Ownable2Step {
         inv.metadataHash = metadataHash;
         inv.invoiceRef = invoiceRef;
         inv.obligorHash = obligorHash;
+        inv.obligorGroupHash = obligorGroupHash;
         inv.riskTier = riskTier;
         inv.verifier = verifier;
         inv.confidential = true;
