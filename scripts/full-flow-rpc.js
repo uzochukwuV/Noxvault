@@ -312,7 +312,8 @@ async function main() {
   const txRequestTier = await invoices.connect(issuer).requestRiskTierMigration(invoiceId, 3);
   console.log("txRequestTier", txRequestTier.hash);
   await txRequestTier.wait();
-  const txApproveTier = await invoices.approveRiskTierMigration(invoiceId);
+  const tierBundle = abi.encode(["bytes[]"], [["0x01", "0x01"]]);
+  const txApproveTier = await invoices.approveRiskTierMigration(invoiceId, tierBundle);
   console.log("txApproveTier", txApproveTier.hash);
   await txApproveTier.wait();
 
@@ -337,7 +338,7 @@ async function main() {
   const paymentId = reported.args.paymentId;
   console.log("PaymentReported", { invoiceId: invoiceId.toString(), paymentId: paymentId.toString() });
 
-  const txFinalize = await servicing.finalizePayment(invoiceId, paymentId);
+  const txFinalize = await servicing.finalizePayment(invoiceId, paymentId, riskBundle);
   console.log("txFinalize", txFinalize.hash);
   await txFinalize.wait();
 

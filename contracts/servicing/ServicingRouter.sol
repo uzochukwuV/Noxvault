@@ -122,7 +122,8 @@ contract ServicingRouter is Ownable2Step {
     function resolveDispute(
         uint256 invoiceId,
         uint256 paymentId,
-        bool acceptPayment
+        bool acceptPayment,
+        bytes calldata proofsBundle
     ) external {
         if (!isResolver[msg.sender] && msg.sender != invoiceRegistry.owner()) revert Unauthorized(msg.sender);
 
@@ -133,7 +134,7 @@ contract ServicingRouter is Ownable2Step {
 
         p.finalized = true;
         if (acceptPayment) {
-            invoiceRegistry.markRepaidEncrypted(invoiceId, p.amount);
+            invoiceRegistry.markRepaidEncrypted(invoiceId, p.amount, proofsBundle);
             InvoiceRegistry.Invoice memory inv = invoiceRegistry.getInvoice(invoiceId);
             if (address(riskManager) != address(0)) {
                 riskManager.commitConfidentialRepayment(
@@ -141,7 +142,8 @@ contract ServicingRouter is Ownable2Step {
                     inv.obligorHash,
                     inv.obligorGroupHash,
                     inv.riskTier,
-                    p.amount
+                    p.amount,
+                    proofsBundle
                 );
             }
         }
@@ -149,7 +151,7 @@ contract ServicingRouter is Ownable2Step {
         emit PaymentResolved(invoiceId, paymentId, acceptPayment, euint256.unwrap(p.amount));
     }
 
-    function finalizePayment(uint256 invoiceId, uint256 paymentId) external {
+    function finalizePayment(uint256 invoiceId, uint256 paymentId, bytes calldata proofsBundle) external {
         Payment storage p = _payments[invoiceId][paymentId];
         if (p.reportedAt == 0) revert InvalidPayment(invoiceId, paymentId);
         if (p.finalized) revert InvalidPayment(invoiceId, paymentId);
@@ -159,7 +161,7 @@ contract ServicingRouter is Ownable2Step {
         if (block.timestamp < deadline) revert DisputeWindowOpen(uint64(block.timestamp), deadline);
 
         p.finalized = true;
-        invoiceRegistry.markRepaidEncrypted(invoiceId, p.amount);
+        invoiceRegistry.markRepaidEncrypted(invoiceId, p.amount, proofsBundle);
         InvoiceRegistry.Invoice memory inv = invoiceRegistry.getInvoice(invoiceId);
         if (address(riskManager) != address(0)) {
             riskManager.commitConfidentialRepayment(
@@ -167,7 +169,8 @@ contract ServicingRouter is Ownable2Step {
                 inv.obligorHash,
                 inv.obligorGroupHash,
                 inv.riskTier,
-                p.amount
+                p.amount,
+                proofsBundle
             );
         }
         emit PaymentFinalized(invoiceId, paymentId, euint256.unwrap(p.amount));

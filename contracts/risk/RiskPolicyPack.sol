@@ -230,13 +230,29 @@ contract RiskPolicyPack is Ownable2Step {
         bytes32 obligorHash,
         bytes32 groupHash,
         uint8 tier,
-        euint256 amount
+        euint256 amount,
+        bytes calldata proofsBundle
     ) external {
         if (msg.sender != riskManager) revert Unauthorized(msg.sender);
+
+        bytes[] memory proofs = abi.decode(proofsBundle, (bytes[]));
+        require(proofs.length == 6);
 
         euint256 pairOut = issuerObligorOutstandingEncrypted[issuer][obligorHash];
         euint256 groupOut = issuerGroupOutstandingEncrypted[issuer][groupHash];
         euint256 tierOut = tierOutstandingEncrypted[tier];
+
+        ebool ok = Nox.le(amount, pairOut);
+        Nox.allowPublicDecryption(ok);
+        require(_publicDecryptBool(ok, proofs[3]));
+
+        ok = Nox.le(amount, groupOut);
+        Nox.allowPublicDecryption(ok);
+        require(_publicDecryptBool(ok, proofs[4]));
+
+        ok = Nox.le(amount, tierOut);
+        Nox.allowPublicDecryption(ok);
+        require(_publicDecryptBool(ok, proofs[5]));
 
         euint256 newPairOut = Nox.sub(pairOut, amount);
         euint256 newGroupOut = Nox.sub(groupOut, amount);
@@ -269,8 +285,16 @@ contract RiskPolicyPack is Ownable2Step {
         emit PlainTierMigrated(fromTier, toTier, amount);
     }
 
-    function migrateConfidentialTier(uint8 fromTier, uint8 toTier, euint256 amount) external {
+    function migrateConfidentialTier(
+        uint8 fromTier,
+        uint8 toTier,
+        euint256 amount,
+        bytes calldata tierOutOkProof
+    ) external {
         if (msg.sender != riskManager) revert Unauthorized(msg.sender);
+        ebool ok = Nox.le(amount, tierOutstandingEncrypted[fromTier]);
+        Nox.allowPublicDecryption(ok);
+        require(_publicDecryptBool(ok, tierOutOkProof));
         euint256 newFrom = Nox.sub(tierOutstandingEncrypted[fromTier], amount);
         euint256 newTo = Nox.add(tierOutstandingEncrypted[toTier], amount);
         tierOutstandingEncrypted[fromTier] = newFrom;

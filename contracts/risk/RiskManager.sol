@@ -344,12 +344,24 @@ contract RiskManager is Ownable2Step {
         bytes32 obligorHash,
         bytes32 obligorGroupHash,
         uint8 riskTier,
-        euint256 amount
+        euint256 amount,
+        bytes calldata proofsBundle
     ) external {
         if (msg.sender != servicingRouter) revert Unauthorized(msg.sender);
 
+        bytes[] memory proofs = abi.decode(proofsBundle, (bytes[]));
+        require(proofs.length == 6);
+
         euint256 issuerOut = issuerOutstandingEncrypted[issuer];
         euint256 poolOut = poolOutstandingEncrypted;
+
+        ebool ok = Nox.le(amount, issuerOut);
+        Nox.allowPublicDecryption(ok);
+        require(_publicDecryptBool(ok, proofs[0]));
+
+        ok = Nox.le(amount, poolOut);
+        Nox.allowPublicDecryption(ok);
+        require(_publicDecryptBool(ok, proofs[1]));
 
         euint256 newIssuerOutstanding = Nox.sub(issuerOut, amount);
         euint256 newPoolOutstanding = Nox.sub(poolOut, amount);
@@ -371,7 +383,7 @@ contract RiskManager is Ownable2Step {
 
         RiskPolicyPack pack = policyPack;
         if (address(pack) != address(0)) {
-            pack.commitConfidentialRepayment(issuer, obligorHash, obligorGroupHash, riskTier, amount);
+            pack.commitConfidentialRepayment(issuer, obligorHash, obligorGroupHash, riskTier, amount, proofsBundle);
         }
     }
 
@@ -383,11 +395,11 @@ contract RiskManager is Ownable2Step {
         }
     }
 
-    function migrateConfidentialTier(uint8 fromTier, uint8 toTier, euint256 amount) external {
+    function migrateConfidentialTier(uint8 fromTier, uint8 toTier, euint256 amount, bytes calldata tierOutOkProof) external {
         if (msg.sender != invoiceRegistry) revert Unauthorized(msg.sender);
         RiskPolicyPack pack = policyPack;
         if (address(pack) != address(0)) {
-            pack.migrateConfidentialTier(fromTier, toTier, amount);
+            pack.migrateConfidentialTier(fromTier, toTier, amount, tierOutOkProof);
         }
     }
 }

@@ -586,7 +586,8 @@ describe("Box / Nox factoring vault", function () {
     await vault.connect(operator)["fundInvoice(uint256,bytes32,bytes,bytes)"](invoiceId, fundHandle, "0x", riskBundle);
 
     await invoices.connect(issuer).requestRiskTierMigration(invoiceId, 3);
-    await invoices.approveRiskTierMigration(invoiceId);
+    const tierBundle = abi.encode(["bytes[]"], [["0x01", "0x01"]]);
+    await invoices.approveRiskTierMigration(invoiceId, tierBundle);
 
     const tier2HandleAfterMigration = await pack.tierOutstandingEncrypted(2);
     const tier3HandleAfterMigration = await pack.tierOutstandingEncrypted(3);
@@ -627,7 +628,7 @@ describe("Box / Nox factoring vault", function () {
         }
       })
       .find((d) => d && d.name === "PaymentReported").args.paymentId;
-    await servicing.finalizePayment(invoiceId, paymentId);
+    await servicing.finalizePayment(invoiceId, paymentId, riskBundle);
 
     const tier3HandleAfterRepay = await pack.tierOutstandingEncrypted(3);
     const tier3ValAfterRepay = BigInt(

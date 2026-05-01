@@ -7,7 +7,8 @@ import {IIdentityRegistry} from "../identity/IIdentityRegistry.sol";
 import {IInvoiceProofVerifier} from "./IInvoiceProofVerifier.sol";
 import {IConfidentialInvoiceProofVerifier} from "./IConfidentialInvoiceProofVerifier.sol";
 import {RiskManager} from "../risk/RiskManager.sol";
-import {Nox, euint256, externalEuint256} from "@iexec-nox/nox-protocol-contracts/contracts/sdk/Nox.sol";
+import {Nox, ebool, euint256, externalEuint256} from "@iexec-nox/nox-protocol-contracts/contracts/sdk/Nox.sol";
+import {INoxCompute} from "@iexec-nox/nox-protocol-contracts/contracts/interfaces/INoxCompute.sol";
 
 contract InvoiceRegistry is Ownable2Step {
     uint256 public constant INVESTOR_ROLE = 1;
@@ -110,7 +111,7 @@ contract InvoiceRegistry is Ownable2Step {
         emit RiskTierMigrationRequested(invoiceId, inv.riskTier, newTier);
     }
 
-    function approveRiskTierMigration(uint256 invoiceId) external onlyOwner {
+    function approveRiskTierMigration(uint256 invoiceId, bytes calldata proofsBundle) external onlyOwner {
         RiskTierMigrationRequest memory req = riskTierMigrationRequests[invoiceId];
         require(req.pending);
 
@@ -123,9 +124,14 @@ contract InvoiceRegistry is Ownable2Step {
         RiskManager rm = riskManager;
         if (address(rm) != address(0)) {
             if (inv.confidential) {
+                bytes[] memory proofs = abi.decode(proofsBundle, (bytes[]));
+                require(proofs.length == 2);
+                ebool ok = Nox.le(inv.repaidAmountEncrypted, inv.fundedAmountEncrypted);
+                Nox.allowPublicDecryption(ok);
+                require(_publicDecryptBool(ok, proofs[0]));
                 euint256 outstanding = Nox.sub(inv.fundedAmountEncrypted, inv.repaidAmountEncrypted);
                 Nox.allow(outstanding, address(rm));
-                rm.migrateConfidentialTier(fromTier, toTier, outstanding);
+                rm.migrateConfidentialTier(fromTier, toTier, outstanding, proofs[1]);
             } else {
                 uint256 outstandingPlain = inv.fundedAmount >= inv.repaidAmount ? inv.fundedAmount - inv.repaidAmount : 0;
                 rm.migratePlainTier(fromTier, toTier, outstandingPlain);
@@ -299,11 +305,16 @@ contract InvoiceRegistry is Ownable2Step {
         emit InvoiceFundedEncrypted(invoiceId, euint256.unwrap(amount));
     }
 
-    function markRepaidEncrypted(uint256 invoiceId, euint256 amount) external {
+    function markRepaidEncrypted(uint256 invoiceId, euint256 amount, bytes calldata proofsBundle) external {
         require(isServicer[msg.sender]);
         Invoice storage inv = _invoices[invoiceId];
         require(inv.status == Status.Funded || inv.status == Status.Disputed);
+        bytes[] memory proofs = abi.decode(proofsBundle, (bytes[]));
+        require(proofs.length == 6);
         euint256 newRepaid = Nox.add(inv.repaidAmountEncrypted, amount);
+        ebool ok = Nox.le(newRepaid, inv.fundedAmountEncrypted);
+        Nox.allowPublicDecryption(ok);
+        require(_publicDecryptBool(ok, proofs[2]));
         inv.repaidAmountEncrypted = newRepaid;
         Nox.allowThis(newRepaid);
         Nox.allow(newRepaid, inv.issuer);
@@ -333,5 +344,15 @@ contract InvoiceRegistry is Ownable2Step {
         require(inv.status == Status.Funded || inv.status == Status.Disputed);
         inv.status = Status.Defaulted;
         emit InvoiceDefaulted(invoiceId);
+    }
+
+    function _publicDecryptBool(ebool handle, bytes memory decryptionProof) private view returns (bool) {
+        bytes memory result = INoxCompute(Nox.noxComputeContract()).validateDecryptionProof(
+            ebool.unwrap(handle),
+            decryptionProof
+        );
+        require(result.length == 1);
+        require(result[0] == 0x00 || result[0] == 0x01);
+        return result[0] != 0x00;
     }
 }
